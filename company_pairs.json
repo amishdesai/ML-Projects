@@ -1,0 +1,34 @@
+[
+  {
+    "company1": "Microsoft",
+    "company2": "LinkedIn"
+  },
+  {
+    "company1": "Alphabet",
+    "company2": "Google"
+  },
+  {
+    "company1": "Meta",
+    "company2": "Instagram"
+  },
+  {
+    "company1": "Amazon",
+    "company2": "Whole Foods"
+  },
+  {
+    "company1": "Berkshire Hathaway",
+    "company2": "GEICO"
+  },
+  {
+    "company1": "Procter & Gamble",
+    "company2": "Gillette"
+  },
+  {
+    "company1": "Sony",
+    "company2": "PlayStation"
+  },
+  {
+    "company1": "Coca-Cola",
+    "company2": "Pepsi"
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "domain": "salesforce.com",
+    "ground_truth": {
+      "industryCodes": "Software & Technology",
+      "naicsCodes": "511210",
+      "sicCodes": "7372"
+    }
+  },
+  {
+    "domain": "jpmorgan.com",
+    "ground_truth": {
+      "industryCodes": "Banking & Financial Services",
+      "naicsCodes": "522110",
+      "sicCodes": "6021"
+    }
+  },
+  {
+    "domain": "pfizer.com",
+    "ground_truth": {
+      "industryCodes": "Pharmaceuticals",
+      "naicsCodes": "325412",
+      "sicCodes": "2834"
+    }
+  },
+  {
+    "domain": "walmart.com",
+    "ground_truth": {
+      "industryCodes": "Retail",
+      "naicsCodes": "452311",
+      "sicCodes": "5331"
+    }
+  },
+  {
+    "domain": "boeing.com",
+    "ground_truth": {
+      "industryCodes": "Aerospace & Defense",
+      "naicsCodes": "336411",
+      "sicCodes": "3721"
+    }
+  },
+  {
+    "domain": "exxonmobil.com",
+    "ground_truth": {
+      "industryCodes": "Oil & Gas",
+      "naicsCodes": "211120",
+      "sicCodes": "1311"
+    }
+  },
+  {
+    "domain": "mcdonalds.com",
+    "ground_truth": {
+      "industryCodes": "Food Service & Restaurants",
+      "naicsCodes": "722513",
+      "sicCodes": "5812"
+    }
+  },
+  {
+    "domain": "ge.com",
+    "ground_truth": {
+      "industryCodes": "Industrial Conglomerate",
+      "naicsCodes": "335314",
+      "sicCodes": "3621"
+    }
+  },
+  {
+    "domain": "verizon.com",
+    "ground_truth": {
+      "industryCodes": "Telecommunications",
+      "naicsCodes": "517311",
+      "sicCodes": "4813"
+    }
+  },
+  {
+    "domain": "amazon.com",
+    "ground_truth": {
+      "industryCodes": "E-commerce & Technology",
+      "naicsCodes": "454111",
+      "sicCodes": "5961"
+    }
+  }
+]

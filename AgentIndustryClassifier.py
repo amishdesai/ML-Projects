@@ -22,6 +22,7 @@ class IndustryInfo(BaseModel):
     accuracyScore:int = Field(description="Primary accuracy score of the Domain")
 
 
+
 agent = create_agent(
     model=model,
      tools=[],
@@ -33,6 +34,7 @@ agent = create_agent(
         "Can you crosscheck the NAICS with  North American Industry Classification System for 2022 "
     ),
 )
+
 
 # Industry Classification
 industryCodes = {}
@@ -107,6 +109,89 @@ def classify_domain(domain):
         return str(e)
 
 
+def evaluate_classification(domain, classification):
+    """Evaluate the quality of a classification using the evaluator agent."""
+    eval_prompt = f"""
+Domain: {domain}
+
+Classification Results:
+- Industry: {classification.industryCodes}
+- NAICS Code: {classification.naicsCodes}
+- SIC Code: {classification.sicCodes}
+- Crosscheck Valid: {classification.crosscheckValid}
+- Classifier Confidence Score: {classification.accuracyScore}
+
+Please evaluate the quality of this industry classification.
+"""
+
+    messages = [{"role": "user", "content": eval_prompt}]
+    result = evaluator_agent.invoke({"messages": messages})
+
+    try:
+        return result["structured_response"]
+    except Exception as e:
+        return str(e)
+
+
+def print_evaluation_summary(evaluated_results):
+    """Print a summary of all evaluations."""
+    if not evaluated_results:
+        return
+
+    print("\n" + "="*80)
+    print("EVALUATION SUMMARY")
+    print("="*80 + "\n")
+
+    # Calculate averages
+    total_overall = 0
+    total_industry = 0
+    total_naics = 0
+    total_sic = 0
+    total_consistency = 0
+    count = 0
+
+    for result in evaluated_results:
+        eval_result = result.get('evaluation')
+        if eval_result and isinstance(eval_result, EvaluationResult):
+            total_overall += eval_result.overallScore
+            total_industry += eval_result.industryAccuracy
+            total_naics += eval_result.naicsValidity
+            total_sic += eval_result.sicValidity
+            total_consistency += eval_result.consistency
+            count += 1
+
+    if count > 0:
+        print(f"Total Classifications Evaluated: {count}")
+        print(f"\nAverage Scores:")
+        print(f"  Overall Score:       {total_overall/count:.2f}/10")
+        print(f"  Industry Accuracy:   {total_industry/count:.2f}/10")
+        print(f"  NAICS Validity:      {total_naics/count:.2f}/10")
+        print(f"  SIC Validity:        {total_sic/count:.2f}/10")
+        print(f"  Consistency:         {total_consistency/count:.2f}/10")
+
+        # Show best and worst
+        valid_results = [r for r in evaluated_results if r.get('evaluation') and isinstance(r['evaluation'], EvaluationResult)]
+        sorted_results = sorted(valid_results,
+                              key=lambda x: x['evaluation'].overallScore,
+                              reverse=True)
+
+        if sorted_results:
+            print(f"\n{'='*80}")
+            print("BEST CLASSIFICATION:")
+            best = sorted_results[0]
+            print(f"Domain: {best['domain']}")
+            print(f"Score: {best['evaluation'].overallScore}/10")
+            print(f"Reasoning: {best['evaluation'].reasoning}")
+
+            print(f"\n{'='*80}")
+            print("WORST CLASSIFICATION:")
+            worst = sorted_results[-1]
+            print(f"Domain: {worst['domain']}")
+            print(f"Score: {worst['evaluation'].overallScore}/10")
+            print(f"Reasoning: {worst['evaluation'].reasoning}")
+            print("="*80 + "\n")
+
+
 # Main execution
 print("🤖 Industry Classifier with Snowflake Integration\n")
 print("Choose mode:")
@@ -114,6 +199,11 @@ print("1. Read from Snowflake")
 print("2. Manual input (original mode)")
 
 mode = input("\nEnter mode (1 or 2): ").strip()
+
+# Ask if user wants evaluation enabled
+enable_eval = input("Enable LLM-based evaluation? (y/n): ").strip().lower() == 'y'
+if enable_eval:
+    print("✅ Evaluation enabled - classifications will be scored by an LLM judge\n")
 
 if mode == "1":
     # Snowflake mode
@@ -136,11 +226,26 @@ if mode == "1":
             for idx, domain in enumerate(domains, 1):
                 print(f"[{idx}/{len(domains)}] Classifying: {domain}")
                 classification = classify_domain(domain)
-                results.append({"domain": domain, "classification": classification})
+
+                result_entry = {"domain": domain, "classification": classification}
+
+                # Evaluate if enabled
+                if enable_eval:
+                    print("  Evaluating classification...")
+                    evaluation = evaluate_classification(domain, classification)
+                    result_entry["evaluation"] = evaluation
+                    print(f"  📊 Eval Score: {evaluation.overallScore}/10")
+                    print(f"  💭 {evaluation.reasoning}")
+
+                results.append(result_entry)
                 print(f"Result: {classification}\n")
                 print("-"*80)
 
             print(f"\n✅ Completed classification of {len(results)} domains!")
+
+            # Show evaluation summary if enabled
+            if enable_eval:
+                print_evaluation_summary(results)
 
         conn.close()
 
@@ -156,7 +261,20 @@ elif mode == "2":
             break
 
         classification = classify_domain(user_input)
-        print(f"Assistant: {classification}\n")
+        print(f"Classification: {classification}\n")
+
+        # Evaluate if enabled
+        if enable_eval:
+            print("Evaluating classification...")
+            evaluation = evaluate_classification(user_input, classification)
+            print(f"\n📊 Evaluation Results:")
+            print(f"  Overall Score:       {evaluation.overallScore}/10")
+            print(f"  Industry Accuracy:   {evaluation.industryAccuracy}/10")
+            print(f"  NAICS Validity:      {evaluation.naicsValidity}/10")
+            print(f"  SIC Validity:        {evaluation.sicValidity}/10")
+            print(f"  Consistency:         {evaluation.consistency}/10")
+            print(f"\n💭 Reasoning: {evaluation.reasoning}\n")
+
         print("-"*60)
 
 else:

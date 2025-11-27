@@ -1,0 +1,137 @@
+[
+  {
+    "company1": "Microsoft",
+    "company2": "LinkedIn",
+    "features1": {
+      "revenue": "$211.9B",
+      "employees": "221,000",
+      "founded": "1975",
+      "industry": "Technology - Software",
+      "headquarters": "Redmond, WA",
+      "description": "Develops, manufactures, licenses software and consumer electronics",
+      "marketCap": "$2.8T"
+    },
+    "features2": {
+      "revenue": "$15.7B",
+      "employees": "20,000",
+      "founded": "2002",
+      "industry": "Professional Networking",
+      "headquarters": "Sunnyvale, CA",
+      "description": "Professional social network and career platform",
+      "acquisitionYear": "2016",
+      "acquisitionPrice": "$26.2B"
+    }
+  },
+  {
+    "company1": "Alphabet",
+    "company2": "Google",
+    "features1": {
+      "revenue": "$307.4B",
+      "employees": "190,000",
+      "founded": "2015",
+      "industry": "Technology Conglomerate",
+      "headquarters": "Mountain View, CA",
+      "description": "Holding company for Google and other subsidiaries",
+      "marketCap": "$1.7T"
+    },
+    "features2": {
+      "revenue": "$280B (part of Alphabet)",
+      "employees": "150,000+",
+      "founded": "1998",
+      "industry": "Internet Services & Technology",
+      "headquarters": "Mountain View, CA",
+      "description": "Search engine, advertising, cloud computing, consumer electronics"
+    }
+  },
+  {
+    "company1": "Meta",
+    "company2": "Instagram",
+    "features1": {
+      "revenue": "$134.9B",
+      "employees": "86,482",
+      "founded": "2004",
+      "industry": "Social Media & Technology",
+      "headquarters": "Menlo Park, CA",
+      "description": "Social media and metaverse technology company",
+      "marketCap": "$1.2T"
+    },
+    "features2": {
+      "revenue": "Part of Meta revenue",
+      "employees": "Integrated into Meta",
+      "founded": "2010",
+      "industry": "Social Media - Photo & Video Sharing",
+      "headquarters": "Menlo Park, CA",
+      "description": "Photo and video sharing social networking service",
+      "acquisitionYear": "2012",
+      "acquisitionPrice": "$1B"
+    }
+  },
+  {
+    "company1": "Amazon",
+    "company2": "Whole Foods",
+    "features1": {
+      "revenue": "$574.8B",
+      "employees": "1,541,000",
+      "founded": "1994",
+      "industry": "E-commerce & Technology",
+      "headquarters": "Seattle, WA",
+      "description": "E-commerce, cloud computing, digital streaming, AI",
+      "marketCap": "$1.9T"
+    },
+    "features2": {
+      "revenue": "$16B (est.)",
+      "employees": "95,000",
+      "founded": "1980",
+      "industry": "Retail - Organic Grocery",
+      "headquarters": "Austin, TX",
+      "description": "Organic and natural foods supermarket chain",
+      "acquisitionYear": "2017",
+      "acquisitionPrice": "$13.7B"
+    }
+  },
+  {
+    "company1": "Berkshire Hathaway",
+    "company2": "GEICO",
+    "features1": {
+      "revenue": "$364.5B",
+      "employees": "396,500",
+      "founded": "1839",
+      "industry": "Conglomerate Holding Company",
+      "headquarters": "Omaha, NE",
+      "description": "Multinational conglomerate holding company",
+      "marketCap": "$900B"
+    },
+    "features2": {
+      "revenue": "$40B+",
+      "employees": "40,000",
+      "founded": "1936",
+      "industry": "Insurance - Auto",
+      "headquarters": "Chevy Chase, MD",
+      "description": "Auto insurance company",
+      "acquisitionYear": "1996",
+      "ownershipPercentage": "100%"
+    }
+  },
+  {
+    "company1": "Coca-Cola",
+    "company2": "PepsiCo",
+    "features1": {
+      "revenue": "$45.8B",
+      "employees": "82,500",
+      "founded": "1892",
+      "industry": "Beverages",
+      "headquarters": "Atlanta, GA",
+      "description": "Beverage manufacturer and marketer",
+      "marketCap": "$270B"
+    },
+    "features2": {
+      "revenue": "$91.5B",
+      "employees": "318,000",
+      "founded": "1898",
+      "industry": "Food & Beverages",
+      "headquarters": "Purchase, NY",
+      "description": "Multinational food, snack, and beverage corporation",
+      "marketCap": "$230B"
+    }
+  }
+]
