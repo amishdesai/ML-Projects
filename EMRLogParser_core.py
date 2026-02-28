@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-spark_log_agent.py
+EMRLogParser.py - Core log parsing without LLM dependencies
 
 Minimal working Spark log analysis agent for AWS EMR on EC2 (YARN):
 - Scans EMR logs in S3 (steps/, containers/, applications/)
@@ -9,23 +9,20 @@ Minimal working Spark log analysis agent for AWS EMR on EC2 (YARN):
     * YARN "diagnostics:" blocks (often contain the true root cause)
 - Normalizes noisy tokens (IDs, numbers, S3 paths, domains, arrow chains)
 - Clusters by (exception_class, normalized_signature)
-- Optionally enriches top clusters with an LLM (OpenAI or Claude API)
 - Outputs a JSON report
 
 Usage:
-  pip install boto3 openai anthropic
-  export ANTHROPIC_API_KEY="sk-ant-..."  # or OPENAI_API_KEY="sk-..."
-  python spark_log_agent.py --bucket my-emr-logs --cluster-prefix j-2AXXXXXX/ --out report.json
+  pip install boto3 python-dotenv
+  python EMRLogParser.py <S3_BUCKET> <CLUSTER_PREFIX> [OUTPUT_PATH]
 
-Optional:
-  python spark_log_agent.py --bucket ... --cluster-prefix ... --spark-version 3.4.1 --llm --max-llm 10
+  Example:
+  python EMRLogParser.py aws-logs-310532615780-us-east-1 j-NKUTYZ21RLTY
 
   Environment variables:
-    EMR_LLM_PROVIDER=claude|openai  # Specify LLM provider (auto-detected if not set)
-    ANTHROPIC_API_KEY=...           # For Claude API
-    ANTHROPIC_MODEL=...             # Default: claude-opus-4-6
-    OPENAI_API_KEY=...              # For OpenAI API
-    OPENAI_MODEL=...                # Default: gpt-5.2
+    EMR_DAYS=2                      # Days to scan
+    EMR_READ_BYTES=2000000          # Bytes to read per file
+    EMR_MAX_BLOCKS_PER_FILE=200     # Max error blocks per file
+    EMR_MAX_CONTAINERS=10000        # Max container files to scan
 """
 
 from __future__ import annotations
@@ -41,7 +38,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
 from collections import defaultdict
-from typing import Dict, List, Tuple, Optional, Iterable
+from typing import Dict, List, Tuple, Optional
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -58,16 +55,6 @@ try:
     import boto3
 except Exception:
     boto3 = None  # allow printing usage even if deps are missing
-
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None  # allow running without LLM deps
-
-try:
-    from anthropic import Anthropic
-except Exception:
-    Anthropic = None  # allow running without Claude deps
 
 
 # ----------------------------
@@ -376,159 +363,6 @@ def cluster_blocks(found: List[Tuple[str, str, str]]) -> List[ErrorCluster]:
 
 
 # ----------------------------
-# LLM enrichment (optional)
-# ----------------------------
-
-class LLMProvider:
-    """Abstract base class for LLM providers."""
-
-    def analyze_cluster(self, cluster: ErrorCluster, spark_version: Optional[str]) -> Dict:
-        """Analyze an error cluster and return structured analysis."""
-        raise NotImplementedError("Subclasses must implement analyze_cluster")
-
-    def _build_prompt(self, cluster: ErrorCluster, spark_version: Optional[str]) -> str:
-        """Build the analysis prompt (shared across providers)."""
-        payload = {
-            "environment": "AWS EMR on EC2 (YARN)",
-            "spark_version": spark_version or "unknown",
-            "exception_class": cluster.exception_class,
-            "normalized_signature": cluster.normalized_signature,
-            "count": cluster.count,
-            "examples": cluster.examples,
-        }
-
-        return (
-            "You are an expert in Apache Spark running on AWS EMR (EC2, YARN).\n"
-            "Given an error cluster from logs, output ONLY valid JSON with keys:\n"
-            "severity (CRITICAL|HIGH|MEDIUM|LOW), category (DATA|CODE|CONFIG|INFRA|PERMISSIONS|UNKNOWN),\n"
-            "root_cause, quick_fix, recommended_spark_configs (array of {key,value,why}),\n"
-            "prevention, verification_steps.\n"
-            "If the error seems like application logic (e.g., IllegalArgumentException requirement failed),\n"
-            "focus on code/data validation fixes rather than Spark tuning.\n\n"
-            f"Cluster:\n{json.dumps(payload, indent=2)}"
-        )
-
-
-class OpenAIProvider(LLMProvider):
-    """OpenAI API provider for LLM analysis."""
-
-    def __init__(self):
-        if OpenAI is None:
-            raise RuntimeError("openai package not installed. Run: pip install openai")
-        self.client = OpenAI()
-        self.model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
-        logging.info(f"Initialized OpenAI provider with model: {self.model}")
-
-    def analyze_cluster(self, cluster: ErrorCluster, spark_version: Optional[str]) -> Dict:
-        """Analyze cluster using OpenAI Responses API."""
-        logging.info(f"Analyzing cluster {cluster.cluster_id} ({cluster.exception_class}) with OpenAI...")
-        prompt = self._build_prompt(cluster, spark_version)
-
-        resp = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-        )
-        text = (resp.output_text or "").strip()
-
-        try:
-            result = json.loads(text)
-            logging.info(f"OpenAI analysis completed for cluster {cluster.cluster_id}")
-            return result
-        except Exception:
-            logging.warning(f"Failed to parse OpenAI output as JSON for cluster {cluster.cluster_id}")
-            return {"unparsed_output": text}
-
-
-class ClaudeProvider(LLMProvider):
-    """Anthropic Claude API provider for LLM analysis."""
-
-    def __init__(self):
-        if Anthropic is None:
-            raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
-        self.client = Anthropic()
-        self.model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
-        logging.info(f"Initialized Claude provider with model: {self.model}")
-
-    def analyze_cluster(self, cluster: ErrorCluster, spark_version: Optional[str]) -> Dict:
-        """Analyze cluster using Claude API."""
-        logging.info(f"Analyzing cluster {cluster.cluster_id} ({cluster.exception_class}) with Claude...")
-        prompt = self._build_prompt(cluster, spark_version)
-
-        try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-
-            # Extract text from response
-            text = message.content[0].text.strip()
-
-            try:
-                result = json.loads(text)
-                logging.info(f"Claude analysis completed for cluster {cluster.cluster_id}")
-                return result
-            except Exception:
-                logging.warning(f"Failed to parse Claude output as JSON for cluster {cluster.cluster_id}")
-                return {"unparsed_output": text}
-        except Exception as e:
-            logging.error(f"Claude API call failed: {type(e).__name__}: {e}")
-            raise
-
-
-def get_llm_provider(provider_name: Optional[str] = None) -> LLMProvider:
-    """
-    Factory function to create the appropriate LLM provider.
-
-    Args:
-        provider_name: 'openai', 'claude', or None (auto-detect from env vars)
-
-    Returns:
-        An instance of LLMProvider (OpenAIProvider or ClaudeProvider)
-    """
-    if provider_name is None:
-        # Auto-detect based on environment variables
-        provider_name = os.environ.get("EMR_LLM_PROVIDER", "").strip().lower()
-
-    if not provider_name:
-        # Default to OpenAI if OPENAI_API_KEY exists, otherwise Claude
-        if os.environ.get("OPENAI_API_KEY"):
-            provider_name = "openai"
-        elif os.environ.get("ANTHROPIC_API_KEY"):
-            provider_name = "claude"
-        else:
-            raise RuntimeError(
-                "No LLM provider configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY, "
-                "or specify EMR_LLM_PROVIDER=openai|claude"
-            )
-
-    if provider_name == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            raise RuntimeError("OpenAI provider selected but OPENAI_API_KEY not set")
-        return OpenAIProvider()
-    elif provider_name in ("claude", "anthropic"):
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise RuntimeError("Claude provider selected but ANTHROPIC_API_KEY not set")
-        return ClaudeProvider()
-    else:
-        raise ValueError(f"Unknown LLM provider: {provider_name}. Use 'openai' or 'claude'")
-
-
-def llm_analyze_cluster(
-    provider: LLMProvider,
-    cluster: ErrorCluster,
-    spark_version: Optional[str],
-) -> Dict:
-    """
-    Calls the configured LLM provider to summarize root cause + fixes for one cluster.
-    Expects the model to return JSON. Falls back to raw text if parsing fails.
-    """
-    return provider.analyze_cluster(cluster, spark_version)
-
-
-# ----------------------------
 # Main pipeline
 # ----------------------------
 
@@ -538,10 +372,7 @@ def run(
     days: int,
     read_byte_limit: int,
     max_blocks_per_file: int,
-    spark_version: Optional[str],
-    use_llm: bool,
-    max_llm: int,
-    max_containers: int ,
+    max_containers: int,
     aws_session=None,
 ) -> Dict:
     logging.info("=" * 60)
@@ -551,8 +382,6 @@ def run(
     logging.info(f"Days to scan: {days}")
     logging.info(f"Read Byte Limit: {read_byte_limit}")
     logging.info(f"Max Blocks Per File: {max_blocks_per_file}")
-    logging.info(f"Spark Version: {spark_version or 'unknown'}")
-    logging.info(f"LLM Enabled: {use_llm}")
     logging.info("=" * 60)
 
     # Simplified: just use elasticmapreduce/ as root
@@ -611,22 +440,6 @@ def run(
     logging.info(f"Scanned {scanned_files} files total, found {len(found)} error blocks")
     clusters = cluster_blocks(found)
 
-    llm_enriched = []
-    llm_failures = 0
-    if use_llm:
-        logging.info(f"Starting LLM enrichment for top {max_llm} clusters...")
-        provider = get_llm_provider()  # Auto-detect provider from environment
-        for idx, c in enumerate(clusters[:max_llm], 1):
-            try:
-                logging.info(f"LLM analyzing cluster {idx}/{min(max_llm, len(clusters))}: {c.exception_class}")
-                analysis = llm_analyze_cluster(provider, c, spark_version)
-            except Exception as e:
-                llm_failures += 1
-                logging.error(f"LLM analysis failed for cluster {c.cluster_id}: {type(e).__name__}: {e}")
-                analysis = {"error": type(e).__name__, "message": str(e)}
-            llm_enriched.append({"cluster": asdict(c), "analysis": analysis})
-        logging.info(f"LLM enrichment completed. Failures: {llm_failures}")
-
     logging.info("=" * 60)
     logging.info("EMR Log Parser completed successfully")
     logging.info("=" * 60)
@@ -639,9 +452,6 @@ def run(
         "scanned_files": scanned_files,
         "total_blocks_extracted": len(found),
         "top_clusters": [asdict(c) for c in clusters[:50]],
-        "llm_enabled": bool(use_llm),
-        "llm_failures": llm_failures,
-        "llm_enriched": llm_enriched,
         "generated_at_epoch": int(time.time()),
     }
 
@@ -656,16 +466,10 @@ def main():
         except ValueError:
             return default
 
-    def env_bool(name: str, default: bool = False) -> bool:
-        v = (os.environ.get(name) or "").strip().lower()
-        if not v:
-            return default
-        return v in {"1", "true", "yes", "y", "on"}
-
     argv = sys.argv
     if len(argv) < 3:
         print(
-            "Usage: python EMRLogParser.py <S3_BUCKET> <CLUSTER_PREFIX e.g. j-XXXX/> [OUTPUT_PATH] [spark_version]",
+            "Usage: python EMRLogParser.py <S3_BUCKET> <CLUSTER_PREFIX e.g. j-XXXX/> [OUTPUT_PATH]",
             file=sys.stderr,
         )
         print(
@@ -673,7 +477,7 @@ def main():
             file=sys.stderr,
         )
         print(
-            "Optional env: EMR_DAYS=2 EMR_USE_LLM=1 EMR_READ_BYTES=2000000 EMR_MAX_BLOCKS_PER_FILE=200 EMR_MAX_LLM=10 EMR_MAX_CONTAINERS=500",
+            "Optional env: EMR_DAYS=2 EMR_READ_BYTES=2000000 EMR_MAX_BLOCKS_PER_FILE=200 EMR_MAX_CONTAINERS=10000",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -681,28 +485,21 @@ def main():
     bucket = argv[1]
     cluster_prefix = argv[2]
 
-    # Determine output path and spark version from remaining args
+    # Determine output path
     if len(argv) > 3:
         out_path = argv[3]
-        spark_version = argv[4] if len(argv) > 4 else None
     else:
         # Generate default timestamped output path
         cluster_id = cluster_prefix.rstrip('/').split('/')[-1] if cluster_prefix else 'unknown'
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = "/Users/amish.desai/ML-Projects/emr_analysis_output"
         os.makedirs(output_dir, exist_ok=True)
-        out_path = f"{output_dir}/emr_analysis_{cluster_id}_{timestamp}.json"
-        spark_version = None
+        out_path = f"{output_dir}/emr_clusters_{cluster_id}_{timestamp}.json"
+
     days = env_int("EMR_DAYS", 2)
     read_bytes = env_int("EMR_READ_BYTES", 2_000_000)
     max_blocks_per_file = env_int("EMR_MAX_BLOCKS_PER_FILE", 200)
-    max_llm = env_int("EMR_MAX_LLM", 10)
     max_containers = env_int("EMR_MAX_CONTAINERS", 10000)
-    use_llm = env_bool("EMR_USE_LLM", False)
-
-    if use_llm and not (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
-        logging.warning("EMR_USE_LLM=1 but neither OPENAI_API_KEY nor ANTHROPIC_API_KEY is set, disabling LLM")
-        use_llm = False
 
     logging.info(f"Configuration: days={days}, read_bytes={read_bytes}, max_blocks_per_file={max_blocks_per_file}, max_containers={max_containers}")
     logging.info(f"Output path: {out_path}")
@@ -719,9 +516,6 @@ def main():
         days=days,
         read_byte_limit=read_bytes,
         max_blocks_per_file=max_blocks_per_file,
-        spark_version=spark_version,
-        use_llm=use_llm,
-        max_llm=max_llm,
         max_containers=max_containers,
         aws_session=aws_session,
     )
