@@ -2,29 +2,26 @@
 """
 EMRLogAnalyzer.py - LLM-powered analysis of EMR error clusters
 
-Takes JSON output from EMRLogParser.py and enriches it with AI analysis.
-Supports both Claude (Anthropic) and OpenAI APIs.
+Takes JSON output from EMRLogParser.py and enriches it with AI analysis using Claude.
 
 Usage:
-  pip install anthropic  # or: pip install openai
-  export ANTHROPIC_API_KEY="sk-ant-..."  # or OPENAI_API_KEY="sk-..."
+  pip install anthropic
+  export ANTHROPIC_API_KEY="sk-ant-..."
 
-  python EMRLogAnalyzer.py <INPUT_JSON> [OUTPUT_JSON] [--provider claude|openai] [--max-clusters 10]
+  python EMRLogAnalyzer.py <INPUT_JSON> [OUTPUT_JSON] [--max-clusters 10]
 
   Example:
   python EMRLogAnalyzer.py emr_analysis_output/emr_clusters_j-NKUTYZ21RLTY_20260228_093607.json
 
   Environment variables:
-    EMR_LLM_PROVIDER=claude|openai  # Specify LLM provider (auto-detected if not set)
-    ANTHROPIC_API_KEY=...           # For Claude API
-    ANTHROPIC_MODEL=...             # Default: claude-opus-4-6
-    OPENAI_API_KEY=...              # For OpenAI API
-    OPENAI_MODEL=...                # Default: gpt-5.2
+    ANTHROPIC_API_KEY=...  # Required
+    ANTHROPIC_MODEL=...    # Default: claude-opus-4-7
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 import json
 import logging
@@ -43,14 +40,12 @@ logging.basicConfig(
 )
 
 try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
-
-try:
     from anthropic import Anthropic
+    from pydantic import BaseModel, Field
 except Exception:
     Anthropic = None
+    BaseModel = None
+    Field = None
 
 
 # ----------------------------
@@ -72,15 +67,63 @@ class ErrorCluster:
 # LLM Provider Abstraction
 # ----------------------------
 
-class LLMProvider:
-    """Abstract base class for LLM providers."""
+class SparkConfig(BaseModel):
+    key: str = Field(description="Spark config key")
+    value: str = Field(description="Recommended value")
+    why: str = Field(description="Reason for this setting")
+
+
+class ClusterAnalysis(BaseModel):
+    severity: str = Field(description="CRITICAL, HIGH, MEDIUM, or LOW")
+    category: str = Field(description="DATA, CODE, CONFIG, INFRA, PERMISSIONS, or UNKNOWN")
+    root_cause: str = Field(description="Root cause explanation")
+    quick_fix: str = Field(description="Immediate remediation steps")
+    recommended_spark_configs: List[SparkConfig] = Field(description="Spark config recommendations")
+    prevention: str = Field(description="How to prevent this error in the future")
+    verification_steps: str = Field(description="Steps to verify the fix worked")
+
+
+class ClaudeProvider:
+    """Anthropic Claude API provider for LLM analysis."""
+
+    SYSTEM_PROMPT = (
+        "You are an expert in Apache Spark running on AWS EMR (EC2, YARN). "
+        "Analyze the given error cluster and provide structured recommendations. "
+        "If the error seems like application logic (e.g., IllegalArgumentException requirement failed), "
+        "focus on code/data validation fixes rather than Spark tuning."
+    )
+
+    def __init__(self):
+        if Anthropic is None:
+            raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+
+        import httpx
+        base_url = os.environ.get("ANTHROPIC_BASE_URL")
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        ssl_cert_file = os.environ.get("SSL_CERT_FILE")
+
+        kwargs = {}
+        if base_url:
+            logging.info(f"Using custom API base URL: {base_url}")
+            kwargs["base_url"] = base_url
+        if auth_token:
+            kwargs["api_key"] = auth_token
+        elif os.environ.get("ANTHROPIC_API_KEY"):
+            kwargs["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
+
+        if ssl_cert_file and os.path.exists(ssl_cert_file):
+            logging.info(f"Using SSL certificate: {ssl_cert_file}")
+            http_client = httpx.Client(verify=ssl_cert_file, timeout=60.0, follow_redirects=True)
+            kwargs["http_client"] = http_client
+
+        self.client = Anthropic(**kwargs)
+        self.model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
+        logging.info(f"Initialized Claude provider with model: {self.model}")
 
     def analyze_cluster(self, cluster: ErrorCluster, spark_version: Optional[str]) -> Dict:
-        """Analyze an error cluster and return structured analysis."""
-        raise NotImplementedError("Subclasses must implement analyze_cluster")
+        """Analyze cluster using Claude API with structured output."""
+        logging.info(f"Analyzing cluster {cluster.cluster_id} ({cluster.exception_class}) with Claude...")
 
-    def _build_prompt(self, cluster: ErrorCluster, spark_version: Optional[str]) -> str:
-        """Build the analysis prompt (shared across providers)."""
         payload = {
             "environment": "AWS EMR on EC2 (YARN)",
             "spark_version": spark_version or "unknown",
@@ -89,124 +132,40 @@ class LLMProvider:
             "count": cluster.count,
             "examples": cluster.examples,
         }
-
-        return (
-            "You are an expert in Apache Spark running on AWS EMR (EC2, YARN).\n"
-            "Given an error cluster from logs, output ONLY valid JSON with keys:\n"
-            "severity (CRITICAL|HIGH|MEDIUM|LOW), category (DATA|CODE|CONFIG|INFRA|PERMISSIONS|UNKNOWN),\n"
-            "root_cause, quick_fix, recommended_spark_configs (array of {key,value,why}),\n"
-            "prevention, verification_steps.\n"
-            "If the error seems like application logic (e.g., IllegalArgumentException requirement failed),\n"
-            "focus on code/data validation fixes rather than Spark tuning.\n\n"
-            f"Cluster:\n{json.dumps(payload, indent=2)}"
-        )
-
-
-class ClaudeProvider(LLMProvider):
-    """Anthropic Claude API provider for LLM analysis."""
-
-    def __init__(self):
-        if Anthropic is None:
-            raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
-        self.client = Anthropic()
-        self.model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
-        logging.info(f"Initialized Claude provider with model: {self.model}")
-
-    def analyze_cluster(self, cluster: ErrorCluster, spark_version: Optional[str]) -> Dict:
-        """Analyze cluster using Claude API."""
-        logging.info(f"Analyzing cluster {cluster.cluster_id} ({cluster.exception_class}) with Claude...")
-        prompt = self._build_prompt(cluster, spark_version)
+        prompt = f"Analyze this error cluster:\n{json.dumps(payload, indent=2)}"
 
         try:
-            message = self.client.messages.create(
+            response = self.client.messages.parse(
                 model=self.model,
                 max_tokens=4096,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+                output_format=ClusterAnalysis,
             )
-
-            # Extract text from response
-            text = message.content[0].text.strip()
-
-            try:
-                result = json.loads(text)
-                logging.info(f"Claude analysis completed for cluster {cluster.cluster_id}")
-                return result
-            except Exception:
-                logging.warning(f"Failed to parse Claude output as JSON for cluster {cluster.cluster_id}")
-                return {"unparsed_output": text}
+            result = response.parsed_output
+            logging.info(f"Claude analysis completed for cluster {cluster.cluster_id}")
+            return {
+                "severity": result.severity,
+                "category": result.category,
+                "root_cause": result.root_cause,
+                "quick_fix": result.quick_fix,
+                "recommended_spark_configs": [
+                    {"key": c.key, "value": c.value, "why": c.why}
+                    for c in result.recommended_spark_configs
+                ],
+                "prevention": result.prevention,
+                "verification_steps": result.verification_steps,
+            }
         except Exception as e:
             logging.error(f"Claude API call failed: {type(e).__name__}: {e}")
             raise
 
 
-class OpenAIProvider(LLMProvider):
-    """OpenAI API provider for LLM analysis."""
-
-    def __init__(self):
-        if OpenAI is None:
-            raise RuntimeError("openai package not installed. Run: pip install openai")
-        self.client = OpenAI()
-        self.model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
-        logging.info(f"Initialized OpenAI provider with model: {self.model}")
-
-    def analyze_cluster(self, cluster: ErrorCluster, spark_version: Optional[str]) -> Dict:
-        """Analyze cluster using OpenAI Responses API."""
-        logging.info(f"Analyzing cluster {cluster.cluster_id} ({cluster.exception_class}) with OpenAI...")
-        prompt = self._build_prompt(cluster, spark_version)
-
-        resp = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-        )
-        text = (resp.output_text or "").strip()
-
-        try:
-            result = json.loads(text)
-            logging.info(f"OpenAI analysis completed for cluster {cluster.cluster_id}")
-            return result
-        except Exception:
-            logging.warning(f"Failed to parse OpenAI output as JSON for cluster {cluster.cluster_id}")
-            return {"unparsed_output": text}
-
-
-def get_llm_provider(provider_name: Optional[str] = None) -> LLMProvider:
-    """
-    Factory function to create the appropriate LLM provider.
-
-    Args:
-        provider_name: 'openai', 'claude', or None (auto-detect from env vars)
-
-    Returns:
-        An instance of LLMProvider (OpenAIProvider or ClaudeProvider)
-    """
-    if provider_name is None:
-        # Auto-detect based on environment variables
-        provider_name = os.environ.get("EMR_LLM_PROVIDER", "").strip().lower()
-
-    if not provider_name:
-        # Default to Claude if ANTHROPIC_API_KEY exists, otherwise OpenAI
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            provider_name = "claude"
-        elif os.environ.get("OPENAI_API_KEY"):
-            provider_name = "openai"
-        else:
-            raise RuntimeError(
-                "No LLM provider configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, "
-                "or specify EMR_LLM_PROVIDER=openai|claude"
-            )
-
-    if provider_name in ("claude", "anthropic"):
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise RuntimeError("Claude provider selected but ANTHROPIC_API_KEY not set")
-        return ClaudeProvider()
-    elif provider_name == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            raise RuntimeError("OpenAI provider selected but OPENAI_API_KEY not set")
-        return OpenAIProvider()
-    else:
-        raise ValueError(f"Unknown LLM provider: {provider_name}. Use 'openai' or 'claude'")
+def get_llm_provider(provider_name: Optional[str] = None) -> ClaudeProvider:
+    """Create the Claude LLM provider."""
+    if not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        raise RuntimeError("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN not set")
+    return ClaudeProvider()
 
 
 # ----------------------------
@@ -277,7 +236,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Analyze EMR error clusters with LLM (Claude or OpenAI)"
+        description="Analyze EMR error clusters with Claude LLM"
     )
     parser.add_argument(
         "input_json",
@@ -290,8 +249,9 @@ def main():
     )
     parser.add_argument(
         "--provider",
-        choices=["claude", "openai"],
-        help="Force specific LLM provider (auto-detects if not specified)"
+        choices=["claude"],
+        default="claude",
+        help="LLM provider (only claude is supported)"
     )
     parser.add_argument(
         "--max-clusters",
